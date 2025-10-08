@@ -5,6 +5,9 @@ namespace App\Http\Controllers;
 use App\Http\Controllers\Controller;
 use App\Models\Venta;
 use App\Models\Producto; 
+use App\Models\Ingreso;
+use App\Notifications\VentaConfirmadaWhatsApp;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
@@ -57,46 +60,58 @@ class VentaController extends Controller
         return response()->json(['message' => 'Venta registrada como pendiente con éxito', 'venta' => $venta], 201);
     }
 
-    /**
-     * Confirma el pago, valida y descuenta el stock, y actualiza el estado de la venta.
-     */
-    public function confirmarPago(Venta $venta)
+  
+
+public function confirmarPago(Venta $venta)
     {
-        // No se puede pagar una venta que no esté pendiente
+        // 1. Validar que la venta esté pendiente
         if ($venta->estado !== 'pendiente') {
             return response()->json(['message' => 'Esta venta no puede ser marcada como pagada.'], 409);
         }
 
         try {
+            // 2. Usar una transacción para asegurar la integridad de los datos
             DB::transaction(function () use ($venta) {
-                // 1. Recorrer cada detalle de la venta para validar el stock
+                // 2a. Recorrer y descontar el stock de cada producto
                 foreach ($venta->detalles as $detalle) {
                     $producto = Producto::find($detalle->id_producto);
                     if ($producto->cantidad_stock < $detalle->cantidad) {
-                        // Si un producto no tiene stock, se lanza una excepción para revertir la transacción
                         throw new \Exception('Stock insuficiente para el producto: ' . $producto->nombre);
                     }
+                    $producto->decrement('cantidad_stock', $detalle->cantidad);
                 }
 
-                // 2. Si todos los productos tienen stock, se descuenta
-                foreach ($venta->detalles as $detalle) {
-                    Producto::find($detalle->id_producto)->decrement('cantidad_stock', $detalle->cantidad);
-                }
+                // 2b. Crear el registro de INGRESO
+                Ingreso::create([
+                    'id_venta' => $venta->id_venta,
+                    'fecha_ingreso' => now(),
+                    'monto' => $venta->total,
+                    'descripcion' => "Ingreso por Venta #{$venta->id_venta} a cliente: {$venta->load('cliente')->cliente->nombre}",
+                ]);
 
-                // 3. Finalmente, se actualiza el estado de la venta a 'pagado'
+                // 2c. Actualizar el estado de la venta a 'pagado'
                 $venta->update(['estado' => 'pagado']);
             });
 
-            return response()->json(['message' => 'Pago confirmado y stock actualizado.', 'venta' => $venta]);
+            // 3. Si la transacción fue exitosa, enviar la notificación de WhatsApp
+            try {
+                $venta->load('cliente');
+                (new VentaConfirmadaWhatsApp($venta))->sendToWhatsApp($venta->cliente);
+            } catch(\Exception $e) {
+                // Si falla el envío, solo lo registramos pero no afectamos la respuesta al usuario
+                Log::error("Falló el envío de WhatsApp para la venta {$venta->id_venta}: " . $e->getMessage());
+            }
+
+            return response()->json(['message' => 'Pago confirmado, stock actualizado, ingreso generado y notificación enviada.', 'venta' => $venta->fresh()]);
 
         } catch (Throwable $e) {
-            // Si se lanzó la excepción por falta de stock, se envía el mensaje de error
             return response()->json([
                'message' => 'No se pudo confirmar el pago.',
                'error' => $e->getMessage(),
-           ], 409);
+            ], 409);
        }
     }
+
 
     /**
      * Cancela una venta. No afecta el stock ya que nunca se descontó.
@@ -162,4 +177,6 @@ class VentaController extends Controller
             return response()->json(['message' => 'Venta actualizada con éxito', 'venta' => $venta->fresh()->load('cliente')]);
         });
     }
+
+    
 }

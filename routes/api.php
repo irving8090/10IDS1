@@ -2,9 +2,11 @@
 
 use App\Http\Controllers\ClienteController;
 use App\Http\Controllers\CompraController;
+use App\Http\Controllers\IngresoController;
 use App\Http\Controllers\LoginController;
 use App\Http\Controllers\ProductoController;
 use App\Http\Controllers\VentaController;
+use App\Http\Controllers\EgresoController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -57,7 +59,15 @@ Route::get('/compras', [CompraController::class, 'index']);
 Route::post('/compras', [CompraController::class, 'store']);
 Route::get('/compras/{id_compra}', [CompraController::class, 'show']);
 Route::delete('/compras/{id_compra}', [CompraController::class, 'destroy']);
+Route::patch('/compras/{compra}/confirmar', [CompraController::class, 'confirmarCompra']);
 
+//Egresos
+Route::get('/egresos', [EgresoController::class, 'index']);
+
+//Ingresos
+Route::get('/ingresos', [IngresoController::class, 'index']);
+
+// Rutas para ventas
 Route::controller(VentaController::class)->prefix('ventas')->group(function () {
     Route::get('/', 'index');
     Route::post('/', 'store');
